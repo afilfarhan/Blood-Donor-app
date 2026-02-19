@@ -51,7 +51,7 @@ const BloodStats: React.FC<BloodStatsProps> = ({ people }) => {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-      <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col">
+      <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col min-h-[450px]">
         <div className="flex items-center justify-between mb-8">
           <div>
             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Group Distribution</h3>
@@ -63,16 +63,16 @@ const BloodStats: React.FC<BloodStatsProps> = ({ people }) => {
           </div>
         </div>
         
-        <div className="h-[320px] w-full relative block overflow-hidden">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-[300px] w-full relative">
+          <ResponsiveContainer width="99%" height="100%">
             <PieChart>
               <Pie
                 data={data}
                 cx="50%"
                 cy="50%"
-                innerRadius={75}
-                outerRadius={105}
-                paddingAngle={6}
+                innerRadius={70}
+                outerRadius={100}
+                paddingAngle={5}
                 dataKey="value"
                 nameKey="name"
                 strokeWidth={0}
@@ -83,36 +83,29 @@ const BloodStats: React.FC<BloodStatsProps> = ({ people }) => {
                 ))}
               </Pie>
               <Tooltip 
-                contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', padding: '16px' }}
-                itemStyle={{ fontSize: '14px', fontWeight: '800' }}
+                contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}
               />
               <Legend 
                 verticalAlign="bottom" 
-                height={40} 
-                iconType="circle" 
-                iconSize={8}
-                wrapperStyle={{ fontSize: '11px', fontWeight: '700', paddingTop: '20px', color: '#6b7280' }} 
+                height={36} 
+                iconType="circle"
+                wrapperStyle={{ fontSize: '11px', fontWeight: '700', color: '#6b7280' }} 
               />
             </PieChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col">
+      <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col min-h-[450px]">
         <div className="flex items-center justify-between mb-8">
           <div>
             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Donor Inventory</h3>
             <p className="text-2xl font-black text-gray-900">{data.length} <span className="text-xs font-medium text-gray-400">Active Groups</span></p>
           </div>
-          <div className="flex gap-1.5">
-             <div className="w-2 h-2 rounded-full bg-gray-100"></div>
-             <div className="w-2 h-2 rounded-full bg-gray-100"></div>
-             <div className="w-2 h-2 rounded-full bg-gray-100"></div>
-          </div>
         </div>
 
-        <div className="h-[320px] w-full relative block overflow-hidden">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-[300px] w-full relative">
+          <ResponsiveContainer width="99%" height="100%">
             <BarChart data={data} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f9fafb" />
               <XAxis 
@@ -128,11 +121,10 @@ const BloodStats: React.FC<BloodStatsProps> = ({ people }) => {
                 tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: '700' }} 
               />
               <Tooltip 
-                cursor={{ fill: '#f9fafb', radius: 12 }}
-                contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', padding: '16px' }}
-                itemStyle={{ fontSize: '14px', fontWeight: '800' }}
+                cursor={{ fill: '#f9fafb', radius: 10 }}
+                contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}
               />
-              <Bar dataKey="value" radius={[10, 10, 0, 0]} barSize={36} isAnimationActive={false}>
+              <Bar dataKey="value" radius={[8, 8, 0, 0]} barSize={40} isAnimationActive={false}>
                 {data.map((entry) => (
                   <Cell key={`bar-${entry.name}`} fill={getGroupColor(entry.name)} />
                 ))}

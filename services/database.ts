@@ -1,9 +1,8 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Person, Group, CloudConfig } from '../types.ts';
+import { Person, CloudConfig } from '../types.ts';
 
 const LOCAL_PEOPLE_KEY = 'bloodline_donors_v2';
-const LOCAL_GROUPS_KEY = 'bloodline_groups_v1';
 
 export class DatabaseService {
   private supabase: SupabaseClient | null = null;
@@ -21,95 +20,58 @@ export class DatabaseService {
       const { data, error } = await this.supabase.from('people').select('*');
       if (error) throw error;
       return (data || []).map(p => ({
-        id: p.id,
+        id: String(p.id),
         name: p.name,
         phoneNumber: p.phone_number,
         bloodGroup: p.blood_group,
         lastDonationDate: p.last_donation_date ? Number(p.last_donation_date) : undefined,
         notes: p.notes,
-        groupIds: p.group_ids || [],
         location: p.location
       }));
     }
     const local = localStorage.getItem(LOCAL_PEOPLE_KEY);
-    return local ? JSON.parse(local) : [];
-  }
-
-  async fetchGroups(): Promise<Group[]> {
-    if (this.supabase) {
-      const { data, error } = await this.supabase.from('groups').select('*');
-      if (error) throw error;
-      return (data || []).map(g => ({
-        id: g.id,
-        name: g.name,
-        color: g.color
-      }));
-    }
-    const local = localStorage.getItem(LOCAL_GROUPS_KEY);
-    return local ? JSON.parse(local) : [];
+    const parsed = local ? JSON.parse(local) : [];
+    // Always normalize IDs to strings
+    return parsed.map((p: any) => ({ ...p, id: String(p.id) }));
   }
 
   async savePerson(person: Person): Promise<void> {
+    const donorId = String(person.id);
     if (this.supabase) {
       const payload = {
-        id: person.id,
+        id: donorId,
         name: person.name,
         phone_number: person.phoneNumber,
         blood_group: person.bloodGroup,
         last_donation_date: person.lastDonationDate,
         notes: person.notes,
-        group_ids: person.groupIds,
         location: person.location
       };
       const { error } = await this.supabase.from('people').upsert(payload);
       if (error) throw error;
     } else {
       const people = await this.fetchPeople();
-      const exists = people.findIndex(p => p.id === person.id);
-      if (exists > -1) people[exists] = person;
-      else people.push(person);
+      const exists = people.findIndex(p => String(p.id) === donorId);
+      if (exists > -1) people[exists] = { ...person, id: donorId };
+      else people.push({ ...person, id: donorId });
       localStorage.setItem(LOCAL_PEOPLE_KEY, JSON.stringify(people));
     }
   }
 
   async deletePerson(id: string): Promise<void> {
+    const donorId = String(id);
     if (this.supabase) {
-      const { error } = await this.supabase.from('people').delete().eq('id', id);
+      const { error } = await this.supabase.from('people').delete().eq('id', donorId);
       if (error) throw error;
     } else {
       const people = await this.fetchPeople();
-      localStorage.setItem(LOCAL_PEOPLE_KEY, JSON.stringify(people.filter(p => p.id !== id)));
+      const filtered = people.filter(p => String(p.id) !== donorId);
+      localStorage.setItem(LOCAL_PEOPLE_KEY, JSON.stringify(filtered));
     }
   }
 
-  async saveGroup(group: Group): Promise<void> {
-    if (this.supabase) {
-      const { error } = await this.supabase.from('groups').upsert({
-        id: group.id,
-        name: group.name,
-        color: group.color
-      });
-      if (error) throw error;
-    } else {
-      const groups = await this.fetchGroups();
-      groups.push(group);
-      localStorage.setItem(LOCAL_GROUPS_KEY, JSON.stringify(groups));
-    }
-  }
-
-  async deleteGroup(id: string): Promise<void> {
-    if (this.supabase) {
-      const { error } = await this.supabase.from('groups').delete().eq('id', id);
-      if (error) throw error;
-    } else {
-      const groups = await this.fetchGroups();
-      localStorage.setItem(LOCAL_GROUPS_KEY, JSON.stringify(groups.filter(g => g.id !== id)));
-    }
-  }
-
-  async syncToCloud(people: Person[], groups: Group[]): Promise<void> {
+  async syncToCloud(people: Person[]): Promise<void> {
     if (!this.supabase) return;
-    for (const group of groups) await this.saveGroup(group);
     for (const person of people) await this.savePerson(person);
   }
 }

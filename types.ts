@@ -1,12 +1,6 @@
 
 export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-';
 
-export interface Group {
-  id: string;
-  name: string;
-  color: string;
-}
-
 export interface Person {
   id: string;
   name: string;
@@ -16,7 +10,6 @@ export interface Person {
   lastDonationDate?: number;
   location?: string;
   notes?: string;
-  groupIds?: string[];
 }
 
 export interface CloudConfig {
