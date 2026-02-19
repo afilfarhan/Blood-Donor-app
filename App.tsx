@@ -1,15 +1,13 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Person, BloodGroup, Group } from './types';
-import { BLOOD_GROUPS, BLOOD_GROUP_COLORS, COMPATIBILITY_MAP } from './constants';
-import BloodStats from './components/BloodStats';
-import Assistant from './components/Assistant';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Person, BloodGroup, Group, CloudConfig } from './types.ts';
+import { BLOOD_GROUPS, BLOOD_GROUP_COLORS } from './constants.tsx';
+import BloodStats from './components/BloodStats.tsx';
+import Assistant from './components/Assistant.tsx';
+import { DatabaseService } from './services/database.ts';
 
-const STORAGE_KEY = 'bloodline_donors_v2';
-const GROUPS_STORAGE_KEY = 'bloodline_groups_v1';
-const RECOVERY_DAYS = 56; // Standard 8 weeks for whole blood
-
-type SortOption = 'name-asc' | 'name-desc' | 'blood-group' | 'status';
+const CLOUD_CONFIG_KEY = 'bloodline_cloud_config';
+const RECOVERY_DAYS = 56;
 
 const GROUP_COLORS = [
   'bg-blue-100 text-blue-700',
@@ -23,69 +21,67 @@ const GROUP_COLORS = [
 const App: React.FC = () => {
   const [people, setPeople] = useState<Person[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [loading, setLoading] = useState(true);
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  const [isCloudModalOpen, setIsCloudModalOpen] = useState(false);
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
+  
+  const [cloudConfig, setCloudConfig] = useState<CloudConfig>(() => {
+    const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
+    return saved ? JSON.parse(saved) : { supabaseUrl: '', supabaseKey: '', active: false };
+  });
+
   const [searchQuery, setSearchQuery] = useState('');
   const [filterGroup, setFilterGroup] = useState<BloodGroup | 'All'>('All');
   const [filterGroupId, setFilterGroupId] = useState<string | 'All'>('All');
-  const [sortBy, setSortBy] = useState<SortOption>('name-asc');
+  const [sortBy, setSortBy] = useState<'name-asc' | 'name-desc' | 'blood-group' | 'status'>('name-asc');
   
-  // Person Form state
-  const [formData, setFormData] = useState<Omit<Person, 'id'>>({
-    name: '',
-    phoneNumber: '',
-    bloodGroup: 'O+',
-    notes: '',
-    groupIds: [],
-    lastDonationDate: undefined
-  });
+  const db = useMemo(() => new DatabaseService(cloudConfig), [cloudConfig]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Group Form state
+  const [formData, setFormData] = useState<Omit<Person, 'id'>>({
+    name: '', phoneNumber: '', bloodGroup: 'O+', notes: '', groupIds: [], lastDonationDate: undefined
+  });
   const [groupName, setGroupName] = useState('');
 
-  // Load from local storage
   useEffect(() => {
-    const savedPeople = localStorage.getItem(STORAGE_KEY);
-    const savedGroups = localStorage.getItem(GROUPS_STORAGE_KEY);
-    if (savedPeople) {
-      try { setPeople(JSON.parse(savedPeople)); } catch (e) { console.error(e); }
-    }
-    if (savedGroups) {
-      try { setGroups(JSON.parse(savedGroups)); } catch (e) { console.error(e); }
-    }
-  }, []);
+    refreshData(true);
+  }, [db]);
 
-  // Save to local storage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(people));
-  }, [people]);
-
-  useEffect(() => {
-    localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(groups));
-  }, [groups]);
+  const refreshData = async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    try {
+      const [p, g] = await Promise.all([db.fetchPeople(), db.fetchGroups()]);
+      setPeople(p);
+      setGroups(g);
+    } catch (e) {
+      console.error("Fetch Error:", e);
+      if (cloudConfig.active && showLoading) alert("Cloud connection failed. Verify your Supabase credentials.");
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  };
 
   const isEligible = (person: Person) => {
     if (!person.lastDonationDate) return true;
-    const daysSince = (Date.now() - person.lastDonationDate) / (1000 * 60 * 60 * 24);
+    const diff = Date.now() - person.lastDonationDate;
+    const daysSince = diff / (1000 * 60 * 60 * 24);
     return daysSince >= RECOVERY_DAYS;
   };
 
   const getRecoveryInfo = (person: Person) => {
     if (!person.lastDonationDate) return null;
-    const daysSince = (Date.now() - person.lastDonationDate) / (1000 * 60 * 60 * 24);
-    if (daysSince < RECOVERY_DAYS) {
-      return Math.ceil(RECOVERY_DAYS - daysSince);
-    }
-    return null;
+    const diff = Date.now() - person.lastDonationDate;
+    const daysSince = diff / (1000 * 60 * 60 * 24);
+    return daysSince < RECOVERY_DAYS ? Math.ceil(RECOVERY_DAYS - daysSince) : null;
   };
 
   const filteredAndSortedPeople = useMemo(() => {
     let result = people.filter(p => {
       const q = searchQuery.toLowerCase();
-      const matchesSearch = p.name.toLowerCase().includes(q) || 
-                           p.phoneNumber.includes(q) || 
-                           p.bloodGroup.toLowerCase().includes(q);
+      const matchesSearch = p.name.toLowerCase().includes(q) || p.phoneNumber.includes(q) || p.bloodGroup.toLowerCase().includes(q);
       const matchesBloodFilter = filterGroup === 'All' || p.bloodGroup === filterGroup;
       const matchesGroupFilter = filterGroupId === 'All' || (p.groupIds || []).includes(filterGroupId);
       return matchesSearch && matchesBloodFilter && matchesGroupFilter;
@@ -94,94 +90,143 @@ const App: React.FC = () => {
     result.sort((a, b) => {
       if (sortBy === 'name-asc') return a.name.localeCompare(b.name);
       if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
-      if (sortBy === 'blood-group') {
-        return BLOOD_GROUPS.indexOf(a.bloodGroup) - BLOOD_GROUPS.indexOf(b.bloodGroup);
-      }
+      if (sortBy === 'blood-group') return BLOOD_GROUPS.indexOf(a.bloodGroup) - BLOOD_GROUPS.indexOf(b.bloodGroup);
       if (sortBy === 'status') {
-        const aE = isEligible(a);
-        const bE = isEligible(b);
-        if (aE === bE) return a.name.localeCompare(b.name);
-        return aE ? -1 : 1;
+        const aE = isEligible(a); const bE = isEligible(b);
+        return aE === bE ? a.name.localeCompare(b.name) : (aE ? -1 : 1);
       }
       return 0;
     });
-
     return result;
   }, [people, searchQuery, filterGroup, filterGroupId, sortBy]);
 
-  const handleOpenModal = (person?: Person) => {
-    if (person) {
-      setEditingPerson(person);
-      setFormData({
-        name: person.name,
-        phoneNumber: person.phoneNumber,
-        bloodGroup: person.bloodGroup,
-        notes: person.notes || '',
-        groupIds: person.groupIds || [],
-        lastDonationDate: person.lastDonationDate
-      });
-    } else {
-      setEditingPerson(null);
-      setFormData({
-        name: '',
-        phoneNumber: '',
-        bloodGroup: 'O+',
-        notes: '',
-        groupIds: [],
-        lastDonationDate: undefined
-      });
-    }
-    setIsModalOpen(true);
-  };
-
-  const handleSavePerson = (e: React.FormEvent) => {
+  const handleSavePerson = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name || !formData.phoneNumber) return;
-
-    if (editingPerson) {
-      setPeople(people.map(p => p.id === editingPerson.id ? { ...formData, id: p.id } : p));
-    } else {
-      const newPerson: Person = { ...formData, id: crypto.randomUUID() };
-      setPeople([...people, newPerson]);
+    try {
+      const person: Person = editingPerson ? { ...formData, id: editingPerson.id } : { ...formData, id: crypto.randomUUID() };
+      await db.savePerson(person);
+      await refreshData();
+      setIsModalOpen(false);
+    } catch (err) {
+      alert("Save failed. Check network or database permissions.");
     }
-    setIsModalOpen(false);
   };
 
-  const handleMarkDonated = (id: string) => {
-    setPeople(people.map(p => 
-      p.id === id ? { ...p, lastDonationDate: Date.now() } : p
-    ));
+  const handleDeletePerson = async (id: string) => {
+    if (window.confirm('Permanently delete this donor record?')) {
+      const originalPeople = [...people];
+      // Optimistic state update
+      setPeople(prev => prev.filter(p => p.id !== id));
+      
+      try {
+        await db.deletePerson(id);
+        // Silently refresh in background to sync with source of truth
+        await refreshData(false);
+      } catch (err) {
+        console.error("Deletion failed:", err);
+        setPeople(originalPeople);
+        alert("Failed to delete from database. Please try again.");
+      }
+    }
   };
 
-  const handleSaveGroup = (e: React.FormEvent) => {
+  const handleMarkDonated = async (person: Person) => {
+    try {
+      const timestamp = Date.now();
+      const updatedPerson = { ...person, lastDonationDate: timestamp };
+      
+      // Update UI immediately
+      setPeople(prev => prev.map(p => p.id === person.id ? updatedPerson : p));
+      
+      // Persist to DB
+      await db.savePerson(updatedPerson);
+      
+      console.log(`Donor ${person.name} marked as donated at ${timestamp}`);
+    } catch (err) {
+      console.error("Mark Donated Error:", err);
+      alert("Failed to update status in the database.");
+      await refreshData(); // Revert on failure
+    }
+  };
+
+  const handleSaveGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!groupName.trim()) return;
-    const newGroup: Group = {
-      id: crypto.randomUUID(),
-      name: groupName.trim(),
-      color: GROUP_COLORS[groups.length % GROUP_COLORS.length]
-    };
-    setGroups([...groups, newGroup]);
-    setGroupName('');
-    setIsGroupModalOpen(false);
-  };
-
-  const deleteGroup = (id: string) => {
-    if (confirm('Delete this group? Contacts will remain but will be removed from this group.')) {
-      setGroups(groups.filter(g => g.id !== id));
-      setPeople(people.map(p => ({
-        ...p,
-        groupIds: (p.groupIds || []).filter(gid => gid !== id)
-      })));
+    try {
+      const newGroup: Group = { id: crypto.randomUUID(), name: groupName.trim(), color: GROUP_COLORS[groups.length % GROUP_COLORS.length] };
+      await db.saveGroup(newGroup);
+      await refreshData();
+      setGroupName('');
+      setIsGroupModalOpen(false);
+    } catch (err) {
+      alert("Error saving group.");
     }
   };
 
-  const toggleGroupSelection = (groupId: string) => {
-    const current = formData.groupIds || [];
-    if (current.includes(groupId)) {
-      setFormData({ ...formData, groupIds: current.filter(id => id !== groupId) });
-    } else {
-      setFormData({ ...formData, groupIds: [...current, groupId] });
+  const handleDeleteGroup = async (id: string) => {
+    if (confirm('Delete group?')) {
+      try {
+        await db.deleteGroup(id);
+        await refreshData();
+      } catch (err) {
+        alert("Error deleting group.");
+      }
+    }
+  };
+
+  const toggleCloud = (active: boolean) => {
+    const newConfig = { ...cloudConfig, active };
+    setCloudConfig(newConfig);
+    localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(newConfig));
+  };
+
+  const exportData = () => {
+    const data = { people, groups, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `bloodline_backup_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const importData = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        const imported = JSON.parse(content);
+        if (confirm('Import data? This will append to your current local storage.')) {
+          if (imported.people) localStorage.setItem('bloodline_donors_v2', JSON.stringify(imported.people));
+          if (imported.groups) localStorage.setItem('bloodline_groups_v1', JSON.stringify(imported.groups));
+          await refreshData(true);
+          alert('Imported!');
+        }
+      } catch (err) { alert('Invalid file.'); }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
+  const handleSyncLocalToCloud = async () => {
+    if (!confirm("Upload local data to your cloud database?")) return;
+    setLoading(true);
+    try {
+      const localPeople = JSON.parse(localStorage.getItem('bloodline_donors_v2') || '[]');
+      const localGroups = JSON.parse(localStorage.getItem('bloodline_groups_v1') || '[]');
+      await db.syncToCloud(localPeople, localGroups);
+      alert("Synchronization successful!");
+      await refreshData(true);
+    } catch (e) {
+      alert("Synchronization failed. Check credentials and network.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -189,308 +234,228 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-gray-50 pb-20">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <div className="bg-red-600 p-1.5 rounded-lg shadow-inner">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-              </svg>
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
             </div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight hidden sm:block">BloodLine Connect</h1>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 leading-none">BloodLine</h1>
+              <div className="flex items-center gap-1 mt-1">
+                <div className={`w-2 h-2 rounded-full ${cloudConfig.active ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{cloudConfig.active ? 'Cloud Active' : 'Offline Mode'}</span>
+              </div>
+            </div>
           </div>
+          
           <div className="flex gap-2">
             <button 
-              onClick={() => setIsGroupModalOpen(true)}
-              className="px-4 py-2 border border-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all flex items-center gap-2"
+              onClick={() => setIsCloudModalOpen(true)}
+              className={`p-2 rounded-xl transition-all ${cloudConfig.active ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400 hover:text-blue-500'}`}
+              title="Cloud Settings"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              Groups
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" /></svg>
             </button>
-            <button 
-              onClick={() => handleOpenModal()}
-              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl font-semibold transition-all shadow-md shadow-red-100 flex items-center gap-2"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Add Donor
+            <button onClick={() => setIsGroupModalOpen(true)} className="px-4 py-2 border border-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+              <span className="hidden sm:inline">Groups</span>
+            </button>
+            <button onClick={() => { setEditingPerson(null); setFormData({name: '', phoneNumber: '', bloodGroup: 'O+', notes: '', groupIds: [], lastDonationDate: undefined}); setIsModalOpen(true); }} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl font-semibold transition-all shadow-md shadow-red-100 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+              <span>Add Donor</span>
             </button>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8 space-y-8">
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-          <div className="xl:col-span-2 space-y-8">
-            <BloodStats people={people} />
-            
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
-              <div className="flex flex-col space-y-4">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <div className="w-12 h-12 border-4 border-red-200 border-t-red-600 rounded-full animate-spin"></div>
+            <p className="text-gray-500 font-medium">Loading Donor Data...</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+            <div className="xl:col-span-2 space-y-8">
+              <BloodStats people={people} />
+              
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <h2 className="text-xl font-bold text-gray-800">Donor Directory</h2>
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="relative flex-1 min-w-[200px]">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                      </span>
-                      <input 
-                        type="text" 
-                        placeholder="Search name, phone, or blood..." 
-                        className="pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-red-500 focus:outline-none w-full"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                      />
-                    </div>
+                    <input type="text" placeholder="Filter by name or phone..." className="px-4 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-red-500 w-full md:w-64" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                    
                     <select 
-                      className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-red-500 focus:outline-none"
-                      value={sortBy}
-                      onChange={(e) => setSortBy(e.target.value as SortOption)}
+                      className="px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white"
+                      value={filterGroup}
+                      onChange={(e) => setFilterGroup(e.target.value as any)}
                     >
-                      <option value="name-asc">Sort: Name (A-Z)</option>
-                      <option value="name-desc">Sort: Name (Z-A)</option>
-                      <option value="blood-group">Sort: Blood Group</option>
-                      <option value="status">Sort: Eligibility</option>
+                      <option value="All">All Blood Types</option>
+                      {BLOOD_GROUPS.map(bg => <option key={bg} value={bg}>{bg}</option>)}
+                    </select>
+
+                    <select className="px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white" value={sortBy} onChange={(e) => setSortBy(e.target.value as any)}>
+                      <option value="name-asc">Sort A-Z</option>
+                      <option value="blood-group">Sort by Group</option>
+                      <option value="status">Sort by Status</option>
                     </select>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2 items-center text-sm border-t border-gray-50 pt-4">
-                   <span className="text-gray-500 mr-2">Filters:</span>
-                   <select 
-                    className="px-3 py-1.5 border border-gray-100 rounded-lg bg-gray-50 focus:outline-none"
-                    value={filterGroup}
-                    onChange={(e) => setFilterGroup(e.target.value as BloodGroup | 'All')}
-                  >
-                    <option value="All">All Blood Groups</option>
-                    {BLOOD_GROUPS.map(bg => <option key={bg} value={bg}>{bg}</option>)}
-                  </select>
-                  <select 
-                    className="px-3 py-1.5 border border-gray-100 rounded-lg bg-gray-50 focus:outline-none"
-                    value={filterGroupId}
-                    onChange={(e) => setFilterGroupId(e.target.value)}
-                  >
-                    <option value="All">All Groups</option>
-                    {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredAndSortedPeople.map(person => {
-                  const recoveryDaysRemaining = getRecoveryInfo(person);
-                  const isCurrentlyEligible = isEligible(person);
-                  
-                  return (
-                    <div key={person.id} className={`group border border-gray-100 p-4 rounded-xl hover:shadow-md transition-all relative flex flex-col h-full bg-white ${!isCurrentlyEligible ? 'opacity-70 saturate-50 grayscale-[0.2]' : ''}`}>
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex gap-2 items-center">
-                          <span className={`${BLOOD_GROUP_COLORS[person.bloodGroup]} text-white text-xs font-bold px-2 py-1 rounded-md`}>
-                            {person.bloodGroup}
-                          </span>
-                          {!isCurrentlyEligible && (
-                            <span className="bg-orange-100 text-orange-700 text-[10px] font-bold px-2 py-1 rounded-md animate-pulse">
-                              RECOVERING
-                            </span>
+                {filteredAndSortedPeople.length === 0 ? (
+                  <div className="text-center py-12 border-2 border-dashed border-gray-100 rounded-2xl">
+                    <p className="text-gray-400">No donors found. Add your first donor to get started!</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {filteredAndSortedPeople.map(person => {
+                      const rec = getRecoveryInfo(person);
+                      const elig = isEligible(person);
+                      return (
+                        <div key={person.id} className={`group border border-gray-100 p-4 rounded-xl hover:shadow-md transition-all flex flex-col h-full bg-white ${!elig ? 'bg-gray-50 opacity-80' : ''}`}>
+                          <div className="flex justify-between items-start mb-2">
+                            <span className={`${BLOOD_GROUP_COLORS[person.bloodGroup]} text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-sm`}>{person.bloodGroup}</span>
+                            <div className="flex gap-1 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => { setEditingPerson(person); setFormData({...person, notes: person.notes || ''}); setIsModalOpen(true); }} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                              <button onClick={() => handleDeletePerson(person.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                            </div>
+                          </div>
+                          <h3 className="font-bold text-gray-900 truncate">{person.name}</h3>
+                          <p className="text-gray-500 text-xs mb-3">{person.phoneNumber}</p>
+                          
+                          {elig ? (
+                            <button 
+                              onClick={() => handleMarkDonated(person)} 
+                              className="mt-auto w-full py-2 bg-red-50 text-red-600 text-xs font-bold rounded-lg hover:bg-red-600 hover:text-white transition-all flex items-center justify-center gap-1 border border-red-100"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" /></svg>
+                              Mark Donated
+                            </button>
+                          ) : (
+                            <div className="mt-auto w-full py-2 bg-gray-100 text-gray-500 text-[10px] font-bold rounded-lg text-center italic border border-gray-200">
+                              Recovery: {rec} days left
+                            </div>
                           )}
                         </div>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => handleOpenModal(person)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                          </button>
-                          <button onClick={() => { if(confirm('Delete?')) setPeople(people.filter(p=>p.id!==person.id)) }} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                          </button>
-                        </div>
-                      </div>
-                      
-                      <h3 className="font-bold text-gray-900 truncate text-base">{person.name}</h3>
-                      <p className="text-gray-500 text-sm mb-2">{person.phoneNumber}</p>
-                      
-                      {person.groupIds && person.groupIds.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mb-3">
-                          {person.groupIds.map(gid => {
-                            const g = groups.find(group => group.id === gid);
-                            return g ? (
-                              <span key={gid} className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${g.color}`}>
-                                {g.name}
-                              </span>
-                            ) : null;
-                          })}
-                        </div>
-                      )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
 
-                      {!isCurrentlyEligible && recoveryDaysRemaining && (
-                        <div className="mt-2 mb-3 bg-orange-50 p-2 rounded-lg border border-orange-100">
-                          <p className="text-[10px] text-orange-800 font-semibold flex items-center gap-1">
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                            Available in {recoveryDaysRemaining} days
-                          </p>
-                        </div>
-                      )}
-
-                      <div className="mt-auto pt-3 flex flex-col gap-2">
-                        {isCurrentlyEligible ? (
-                          <button 
-                            onClick={() => handleMarkDonated(person.id)}
-                            className="w-full py-1.5 bg-red-50 text-red-600 border border-red-100 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center gap-1"
-                          >
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-                            Mark Donated
-                          </button>
-                        ) : (
-                          <div className="w-full py-1.5 bg-gray-50 text-gray-400 border border-gray-100 rounded-lg text-xs font-bold text-center italic">
-                            In Recovery
-                          </div>
-                        )}
-                        
-                        <div className="border-t border-gray-50 pt-2">
-                          <p className="text-[10px] uppercase font-bold text-gray-400 mb-1">Target Compatibility</p>
-                          <div className="flex flex-wrap gap-1">
-                            {COMPATIBILITY_MAP[person.bloodGroup].canDonateTo.slice(0, 4).map(target => (
-                              <span key={target} className="text-[10px] bg-green-50 text-green-700 px-1 rounded">to {target}</span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+            <div className="xl:col-span-1 space-y-6">
+              <Assistant people={people} />
+              
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+                <h3 className="text-sm font-bold text-gray-800">Local Tools</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={exportData} className="flex items-center justify-center gap-2 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-100 transition-colors">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    Export JSON
+                  </button>
+                  <button onClick={() => fileInputRef.current?.click()} className="flex items-center justify-center gap-2 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-100 transition-colors">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                    Import JSON
+                  </button>
+                  <input type="file" ref={fileInputRef} onChange={importData} accept=".json" className="hidden" />
+                </div>
               </div>
             </div>
           </div>
+        )}
+      </main>
 
-          <div className="xl:col-span-1">
-            <div className="sticky top-24 space-y-6">
-              <Assistant people={people} />
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                  <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  System Tips
-                </h3>
-                <ul className="text-xs text-gray-600 space-y-3">
-                  <li className="flex items-start gap-2">
-                    <span className="text-red-500 mt-0.5">•</span>
-                    <span><strong>Recovery Period:</strong> Whole blood donation requires a 56-day (8-week) recovery before the next donation.</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-red-500 mt-0.5">•</span>
-                    <span>Inactive donors are visually dimmed and the AI is aware they are unavailable for current needs.</span>
-                  </li>
-                </ul>
+      {/* Cloud Config Modal */}
+      {isCloudModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in duration-200">
+            <div className="p-6 bg-blue-600 text-white flex justify-between items-center">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" /></svg>
+                Cloud Database
+              </h2>
+              <button onClick={() => setIsCloudModalOpen(false)} className="text-white/80 hover:text-white"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Supabase Project URL</label>
+                  <input type="text" className="w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-blue-500 text-sm" value={cloudConfig.supabaseUrl} onChange={e => setCloudConfig({...cloudConfig, supabaseUrl: e.target.value})} placeholder="https://xyz.supabase.co" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Public Anon Key</label>
+                  <input type="password" name="api-key-supabase" className="w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-blue-500 text-sm" value={cloudConfig.supabaseKey} onChange={e => setCloudConfig({...cloudConfig, supabaseKey: e.target.value})} placeholder="eyJh..." />
+                </div>
+              </div>
+
+              <div className="pt-2 space-y-3">
+                <button 
+                  onClick={() => toggleCloud(!cloudConfig.active)}
+                  className={`w-full py-3 rounded-xl font-bold transition-all shadow-md ${cloudConfig.active ? 'bg-red-50 text-red-600 hover:bg-red-600 hover:text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                >
+                  {cloudConfig.active ? 'Disable Sync' : 'Enable Sync'}
+                </button>
+                
+                {cloudConfig.active && (
+                  <button onClick={handleSyncLocalToCloud} className="w-full py-3 bg-gray-50 text-gray-600 text-sm font-bold rounded-xl hover:bg-gray-100 flex items-center justify-center gap-2 border border-gray-100">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                    Sync Local to Cloud
+                  </button>
+                )}
               </div>
             </div>
           </div>
         </div>
-      </main>
+      )}
 
       {/* Person Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in duration-200">
             <div className="p-6 bg-red-600 text-white flex justify-between items-center">
-              <h2 className="text-xl font-bold">{editingPerson ? 'Edit Donor' : 'Add New Donor'}</h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-white/80 hover:text-white">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+              <h2 className="text-xl font-bold">{editingPerson ? 'Update Record' : 'Register Donor'}</h2>
+              <button onClick={() => setIsModalOpen(false)} className="text-white/80 hover:text-white"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
             </div>
-            <form onSubmit={handleSavePerson} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Full Name</label>
-                <input required type="text" className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
-              </div>
+            <form onSubmit={handleSavePerson} className="p-6 space-y-4">
+              <input required type="text" placeholder="Donor Name" className="w-full px-4 py-2 border rounded-xl" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Phone Number</label>
-                  <input required type="tel" className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none" value={formData.phoneNumber} onChange={e => setFormData({...formData, phoneNumber: e.target.value})} />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Blood Group</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none" value={formData.bloodGroup} onChange={e => setFormData({...formData, bloodGroup: e.target.value as BloodGroup})}>
-                    {BLOOD_GROUPS.map(bg => <option key={bg} value={bg}>{bg}</option>)}
-                  </select>
-                </div>
+                <input required type="tel" placeholder="Phone Number" className="w-full px-4 py-2 border rounded-xl" value={formData.phoneNumber} onChange={e => setFormData({...formData, phoneNumber: e.target.value})} />
+                <select className="w-full px-4 py-2 border rounded-xl" value={formData.bloodGroup} onChange={e => setFormData({...formData, bloodGroup: e.target.value as any})}>
+                  {BLOOD_GROUPS.map(bg => <option key={bg} value={bg}>{bg}</option>)}
+                </select>
               </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Assign to Groups</label>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {groups.length === 0 ? (
-                    <p className="text-xs text-gray-400 italic">No groups created yet. Use the "Groups" button in header to add some.</p>
-                  ) : (
-                    groups.map(g => (
-                      <button
-                        key={g.id}
-                        type="button"
-                        onClick={() => toggleGroupSelection(g.id)}
-                        className={`text-xs px-3 py-1 rounded-full border transition-all ${
-                          formData.groupIds?.includes(g.id) 
-                            ? `${g.color} border-transparent ring-2 ring-offset-1 ring-red-400` 
-                            : 'border-gray-200 text-gray-500 hover:bg-gray-50'
-                        }`}
-                      >
-                        {g.name}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Additional Notes</label>
-                <textarea className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none h-20 resize-none" value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} />
-              </div>
-              <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-3 border border-gray-200 text-gray-600 font-bold rounded-xl hover:bg-gray-50">Cancel</button>
-                <button type="submit" className="flex-1 px-4 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 shadow-lg shadow-red-100">Save Donor</button>
-              </div>
+              <textarea placeholder="Notes (allergies, location, etc.)" className="w-full px-4 py-2 border rounded-xl h-24" value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} />
+              <button type="submit" className="w-full py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg hover:bg-red-700 transition-colors">
+                {editingPerson ? 'Update Donor' : 'Add Donor'}
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Groups Management Modal */}
+      {/* Group Modal */}
       {isGroupModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-4">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in">
             <div className="p-6 bg-gray-800 text-white flex justify-between items-center">
-              <h2 className="text-xl font-bold">Manage Groups</h2>
-              <button onClick={() => setIsGroupModalOpen(false)} className="text-white/80 hover:text-white">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+              <h2 className="text-xl font-bold">Groups</h2>
+              <button onClick={() => setIsGroupModalOpen(false)} className="text-white/80 hover:text-white"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
             </div>
             <div className="p-6 space-y-6">
               <form onSubmit={handleSaveGroup} className="flex gap-2">
-                <input 
-                  type="text" 
-                  placeholder="New group name..." 
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-gray-400"
-                  value={groupName}
-                  onChange={(e) => setGroupName(e.target.value)}
-                />
-                <button type="submit" className="bg-gray-800 text-white px-4 py-2 rounded-xl hover:bg-gray-700">Add</button>
+                <input type="text" placeholder="Create new group..." className="flex-1 px-4 py-2 border rounded-xl" value={groupName} onChange={(e) => setGroupName(e.target.value)} />
+                <button type="submit" className="bg-gray-800 text-white px-4 py-2 rounded-xl hover:bg-gray-700 transition-colors">Create</button>
               </form>
-
-              <div className="space-y-2">
-                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Existing Groups</h3>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
                 {groups.length === 0 ? (
-                  <p className="text-sm text-gray-500 italic py-4 text-center">No groups yet.</p>
+                  <p className="text-center text-gray-400 py-8 italic text-sm">Organize donors into groups (e.g., Staff, VIPs).</p>
                 ) : (
-                  <div className="max-h-[300px] overflow-y-auto space-y-2 pr-2">
-                    {groups.map(g => (
-                      <div key={g.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 group">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-3 h-3 rounded-full ${g.color.split(' ')[0]}`}></div>
-                          <span className="font-medium text-gray-700">{g.name}</span>
-                        </div>
-                        <button onClick={() => deleteGroup(g.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                  groups.map(g => (
+                    <div key={g.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl group">
+                      <span className="font-medium text-gray-700">{g.name}</span>
+                      <button onClick={() => handleDeleteGroup(g.id)} className="text-gray-300 hover:text-red-600 transition-colors"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                    </div>
+                  ))
                 )}
               </div>
             </div>

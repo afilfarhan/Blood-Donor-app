@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { Person } from "../types";
+import { Person } from "../types.ts";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const RECOVERY_DAYS = 56;

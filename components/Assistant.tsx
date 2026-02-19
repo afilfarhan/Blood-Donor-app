@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Person, ChatMessage } from '../types';
-import { getGeminiResponse } from '../services/gemini';
+import { Person, ChatMessage } from '../types.ts';
+import { getGeminiResponse } from '../services/gemini.ts';
 
 interface AssistantProps {
   people: Person[];

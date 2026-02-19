@@ -13,10 +13,16 @@ export interface Person {
   phoneNumber: string;
   bloodGroup: BloodGroup;
   lastDonated?: string;
-  lastDonationDate?: number; // Timestamp of last donation
+  lastDonationDate?: number;
   location?: string;
   notes?: string;
   groupIds?: string[];
+}
+
+export interface CloudConfig {
+  supabaseUrl: string;
+  supabaseKey: string;
+  active: boolean;
 }
 
 export interface DonationCompatibility {
