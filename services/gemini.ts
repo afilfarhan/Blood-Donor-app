@@ -1,11 +1,15 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { Person } from "../types.ts";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const apiKey = process.env.API_KEY || '';
+const ai = new GoogleGenAI({ apiKey });
 const RECOVERY_DAYS = 56;
 
 export const getGeminiResponse = async (query: string, data: Person[]) => {
+  if (!apiKey) {
+    return "The AI assistant is currently offline. Please ensure the API_KEY is set in your environment variables.";
+  }
+
   const model = 'gemini-3-flash-preview';
   
   const now = Date.now();
@@ -47,6 +51,6 @@ export const getGeminiResponse = async (query: string, data: Person[]) => {
     return response.text || "I'm sorry, I couldn't process that request.";
   } catch (error) {
     console.error("Gemini Error:", error);
-    return "Error: Could not connect to AI assistant. Please check your API key.";
+    return "Error: Could not connect to AI assistant. Please check your API key and Vercel environment settings.";
   }
 };
