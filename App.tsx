@@ -101,20 +101,29 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDeletePerson = async (id: string) => {
+  /**
+   * REWRITTEN DELETE FUNCTION
+   * Uses Optimistic UI pattern for immediate responsiveness
+   */
+  const handleDeletePerson = async (e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
     const donorId = String(id);
-    if (!window.confirm('Are you sure you want to permanently delete this donor record?')) return;
+    if (!window.confirm('Are you sure you want to permanently delete this donor?')) return;
+
+    // 1. Optimistic update: Remove from local state immediately
+    const originalPeople = [...people];
+    setPeople(current => current.filter(p => String(p.id) !== donorId));
 
     try {
-      // Perform database deletion
+      // 2. Perform the actual deletion in storage
       await db.deletePerson(donorId);
-      // Update local state directly to reflect changes immediately
-      setPeople(prev => prev.filter(p => String(p.id) !== donorId));
     } catch (err) {
       console.error("Deletion error:", err);
-      alert("Could not delete donor. Please try again.");
-      // On error, re-sync with source of truth
-      await refreshData();
+      // 3. Rollback if deletion fails
+      setPeople(originalPeople);
+      alert("Failed to delete the record. Please try again.");
     }
   };
 
@@ -230,7 +239,11 @@ const App: React.FC = () => {
                               <button onClick={() => { setEditingPerson(person); setFormData({name: person.name, phoneNumber: person.phoneNumber, bloodGroup: person.bloodGroup, notes: person.notes || ''}); setIsModalOpen(true); }} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Edit">
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                               </button>
-                              <button onClick={() => handleDeletePerson(person.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg" title="Delete">
+                              <button 
+                                onClick={(e) => handleDeletePerson(e, person.id)} 
+                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg" 
+                                title="Delete"
+                              >
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                               </button>
                             </div>
